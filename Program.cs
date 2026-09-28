@@ -24,6 +24,24 @@ class Program
         return RandomNumberGenerator.GetBytes(16);
     }
 
+    static bool VerifyMasterPassword(string password)
+    {
+        string stored = File.ReadAllText("master.txt");
+        string[] parts = stored.Split(':');
+
+        byte[] salt = Convert.FromBase64String(parts[0]);
+        byte[] storedHash = Convert.FromBase64String(parts[1]);
+
+        byte[] hash = Rfc2898DeriveBytes.Pbkdf2(
+            password,
+            salt,
+            100_000,
+            HashAlgorithmName.SHA256,
+            32
+        );
+
+        return CryptographicOperations.FixedTimeEquals(hash, storedHash);
+    }
     static void Main(string[] args)
     {
         if (!File.Exists(FilePath))
@@ -36,6 +54,15 @@ class Program
             SetupMasterPassword();
         }
         
+        Console.Write("Enter master password: ");
+        string enteredPassword = Console.ReadLine()!;
+
+        if (!VerifyMasterPassword(enteredPassword))
+        {
+            Console.WriteLine("Incorrect master password");
+            Console.ReadKey();
+            return;
+        }
         vault = LoadVault();
 
         bool running = true;
@@ -46,6 +73,7 @@ class Program
             Console.WriteLine("2. Add Entry");
             Console.WriteLine("3. Exit");
             Console.WriteLine("4. Delete Entry");
+            Console.WriteLine("5. Search Entries");
             Console.Write("\nSelect an option: ");
 
             string? selection = Console.ReadLine();
@@ -64,6 +92,9 @@ class Program
                     break;
                 case "4":
                     DeleteEntry();
+                    break;
+                case "5":
+                    SearchEntries();
                     break;
                 default:
                     Console.WriteLine("\nInvalid option try again broski");
@@ -162,6 +193,33 @@ class Program
                 Console.WriteLine($"    Username: {entry.Username}");
                 Console.WriteLine($"    Password: {entry.Password}");
                 Console.WriteLine($"    URL: {entry.URL}");
+                Console.WriteLine();
+            }
+        }
+    }
+
+    private static void SearchEntries()
+    {
+        Console.Clear();
+        Console.Write("Search by service name: ");
+        string query = Console.ReadLine() ?? "";
+
+        var results = vault.FindAll(entry =>
+        entry.Title.Contains(query, StringComparison.OrdinalIgnoreCase));
+
+        Console.WriteLine("\nSearch Results:\n");
+
+        if (results.Count == 0)
+        {
+            Console.WriteLine("No matching entries found");
+        }
+        else
+        {
+            foreach (var entry in results)
+            {
+                Console.WriteLine($"Title: {entry.Title}");
+                Console.WriteLine($"Username: {entry.Username}");
+                Console.WriteLine($"URL: {entry.URL}");
                 Console.WriteLine();
             }
         }
