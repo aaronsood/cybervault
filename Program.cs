@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
+using System.Text;
 
 public class PasswordEntry
 {
@@ -108,6 +109,31 @@ class Program
         }
     }
 
+    static string ReadPassword()
+    {
+        StringBuilder password = new StringBuilder();
+
+        while(true)
+        {
+            ConsoleKeyInfo key = Console.ReadKey(true);
+
+            if (key.Key == ConsoleKey.Enter)
+            break;
+
+            if (key.Key == ConsoleKey.Backspace && password.Length > 0)
+            {
+                password.Length--;
+                Console.Write("\b \b");
+            }
+            else if (!char.IsControl(key.KeyChar))
+            {
+                password.Append(key.KeyChar);
+                Console.Write("*");
+            }
+        }
+        Console.WriteLine();
+        return password.ToString();
+    }
     static void SetupMasterPassword()
     {
         Console.Write("Create a master password: ");
@@ -156,7 +182,7 @@ class Program
         string username = Console.ReadLine() ?? "";
 
         Console.Write("Password: ");
-        string password = Console.ReadLine() ?? "";
+        string password = ReadPassword();
 
         Console.Write("URL (Optional): ");
         string url = Console.ReadLine() ?? "";
@@ -260,7 +286,7 @@ class Program
         Console.Write($"New username/email ({entry.Username}): ");
         string username = Console.ReadLine() ?? "";
 
-        Console.Write($"New password ({entry.Password}): ");
+        Console.Write("New password (leave blank to keep current):  ");
         string password = Console.ReadLine() ?? "";
 
         Console.Write($"New URL ({entry.URL}): ");
@@ -269,7 +295,7 @@ class Program
         if (!string.IsNullOrWhiteSpace(username))
             entry.Username = username;
 
-        if (!string.IsNullOrWhiteSpace(username))
+        if (!string.IsNullOrWhiteSpace(password))
             entry.Password = password;
 
         if (!string.IsNullOrWhiteSpace(url))
