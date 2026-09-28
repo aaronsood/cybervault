@@ -3,6 +3,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
 
 public class PasswordEntry
 {
@@ -18,13 +19,23 @@ class Program
     private const string FilePath = "vault.json";
     private static List<PasswordEntry> vault = new();
 
+    static byte[] GenerateSalt()
+    {
+        return RandomNumberGenerator.GetBytes(16);
+    }
+
     static void Main(string[] args)
     {
         if (!File.Exists(FilePath))
         {
             File.WriteAllText(FilePath, "[]");
         }
-
+        
+        if (!File.Exists("master.txt"))
+        {
+            SetupMasterPassword();
+        }
+        
         vault = LoadVault();
 
         bool running = true;
@@ -61,6 +72,31 @@ class Program
             }
         }
     }
+
+    static void SetupMasterPassword()
+    {
+        Console.Write("Create a master password: ");
+        string masterPassword = Console.ReadLine()!;
+
+        byte[] salt = GenerateSalt();
+
+        byte[] hash = Rfc2898DeriveBytes.Pbkdf2(
+            masterPassword,
+            salt,
+            100_000,
+            HashAlgorithmName.SHA256,
+            32
+        );
+        
+
+        File.WriteAllText("master.txt",
+            Convert.ToBase64String(salt) + ":" +
+            Convert.ToBase64String(hash));
+
+        Console.WriteLine("Master Password created.");
+        Console.ReadLine();
+    }
+
     private static List<PasswordEntry> LoadVault()
     {
         string json = File.ReadAllText(FilePath);
