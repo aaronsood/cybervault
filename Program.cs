@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using System.Text;
+using System.Linq;
 
 public class PasswordEntry
 {
@@ -17,7 +18,9 @@ public class PasswordEntry
 
 class Program
 {
-    private const string FilePath = "vault.json";
+    private const string VaultPath = "vault.dat";
+    private static byte[] key = Array.Empty<byte>();
+    private static byte[] vaultSalt = Array.Empty<byte>();
     private static List<PasswordEntry> vault = new();
 
     static byte[] GenerateSalt()
@@ -43,20 +46,26 @@ class Program
 
         return CryptographicOperations.FixedTimeEquals(hash, storedHash);
     }
+
+    static byte[] DeriveKey(string password, byte[] salt)
+    {
+        return Rfc2898DeriveBytes.Pbkdf2(
+            password,
+            salt,
+            100_000,
+            HashAlgorithmName.SHA256,
+            32
+        );
+    }
     static void Main(string[] args)
     {
-        if (!File.Exists(FilePath))
-        {
-            File.WriteAllText(FilePath, "[]");
-        }
-        
         if (!File.Exists("master.txt"))
         {
             SetupMasterPassword();
         }
         
         Console.Write("Enter master password: ");
-        string enteredPassword = Console.ReadLine()!;
+        string enteredPassword = ReadPassword()!;
 
         if (!VerifyMasterPassword(enteredPassword))
         {
@@ -64,9 +73,10 @@ class Program
             Console.ReadKey();
             return;
         }
-        vault = LoadVault();
+        vault = LoadVault(enteredPassword);
 
         bool running = true;
+        
         while (running)
         {
             Console.Clear();
@@ -137,7 +147,7 @@ class Program
     static void SetupMasterPassword()
     {
         Console.Write("Create a master password: ");
-        string masterPassword = Console.ReadLine()!;
+        string masterPassword = ReadPassword()!;
 
         byte[] salt = GenerateSalt();
 
@@ -155,20 +165,65 @@ class Program
             Convert.ToBase64String(hash));
 
         Console.WriteLine("Master Password created.");
-        Console.ReadLine();
+
+        Console.WriteLine("Press any key to return to menu");
+
+        Console.ReadKey();
     }
 
-    private static List<PasswordEntry> LoadVault()
+    private static List<PasswordEntry> LoadVault(string masterPassword)
     {
-        string json = File.ReadAllText(FilePath);
-        List<PasswordEntry>? loaded = JsonSerializer.Deserialize<List<PasswordEntry>>(json);
-        return loaded ?? new List<PasswordEntry>();
+        if (!File.Exists(VaultPath))
+        {
+            vaultSalt = GenerateSalt();
+            key = DeriveKey(masterPassword, vaultSalt);
+            return new List<PasswordEntry>();
+        }
+
+        byte[] data = File.ReadAllBytes(VaultPath);
+
+        if (data.Length < 44)
+        {
+            Console.WriteLine("Vault file is corrupted");
+            Console.ReadKey();
+            Environment.Exit(1);
+        }
+
+        vaultSalt = data[..16];
+        byte[] nonce = data[16..28];
+        byte[] tag = data[28..44];
+        byte[] cipher = data[44..];
+
+        key = DeriveKey(masterPassword, vaultSalt) ; 
+        byte[] plain = new byte[cipher.Length];
+        
+        try
+        {
+            using var aes = new AesGcm(key, 16);
+            aes.Decrypt(nonce, cipher, tag, plain);
+        }
+
+        catch (CryptographicException)
+        {
+           Console.WriteLine("Could not decrypt vault, most likely corrupted (or tampered with)");
+           Console.ReadKey();
+           Environment.Exit(1);
+        }
+        return JsonSerializer.Deserialize<List<PasswordEntry>>(plain)?? new List<PasswordEntry>();
     }
+    
     private static void SaveVault()
     {
-        var options = new JsonSerializerOptions { WriteIndented = true};
-        string json = JsonSerializer.Serialize(vault, options);
-        File.WriteAllText(FilePath, json);
+        byte[] plain = JsonSerializer.SerializeToUtf8Bytes(vault);
+        byte[] nonce = RandomNumberGenerator.GetBytes(12);
+        byte[] cipher = new byte[plain.Length];
+        byte[] tag = new byte[16];
+
+        using var aes = new AesGcm(key, 16);
+        aes.Encrypt(nonce, plain, cipher, tag);
+
+        File.WriteAllBytes(VaultPath,
+        vaultSalt.Concat(nonce).Concat(tag).Concat(cipher).ToArray());
     }
     private static void AddEntry()
     {
@@ -226,6 +281,8 @@ class Program
                 Console.WriteLine();
             }
         }
+        Console.WriteLine("\nPress any key to return to menu");
+        Console.ReadKey();
     }
 
     private static void SearchEntries()
@@ -248,12 +305,20 @@ class Program
             foreach (var entry in results)
             {
                 Console.WriteLine($"Title: {entry.Title}");
+                
                 Console.WriteLine($"Username: {entry.Username}");
+                
+                Console.WriteLine($"Password: {entry.Password}");
+
                 Console.WriteLine($"URL: {entry.URL}");
+
                 Console.WriteLine();
             }
         }
+        Console.WriteLine("Press any key to return to menu");
+        Console.ReadKey();
     }
+    
 
     private static void EditEntry()
     {
@@ -287,7 +352,7 @@ class Program
         string username = Console.ReadLine() ?? "";
 
         Console.Write("New password (leave blank to keep current):  ");
-        string password = Console.ReadLine() ?? "";
+        string password = ReadPassword();
 
         Console.Write($"New URL ({entry.URL}): ");
         string url = Console.ReadLine() ?? "";
@@ -295,7 +360,7 @@ class Program
         if (!string.IsNullOrWhiteSpace(username))
             entry.Username = username;
 
-        if (!string.IsNullOrWhiteSpace(password))
+        if (!string.IsNullOrEmpty(password))
             entry.Password = password;
 
         if (!string.IsNullOrWhiteSpace(url))
