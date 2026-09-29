@@ -3,4 +3,4 @@ obj/
 publish/
 vault.json
 vault.dat
-master.txt
+master.txt.DS_Store
