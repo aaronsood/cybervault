@@ -2,10 +2,11 @@
 using System.IO;
 using System.Collections.Generic;
 using System.Text.Json;
-using System.ComponentModel.DataAnnotations;
 using System.Security.Cryptography;
 using System.Text;
 using System.Linq;
+using System.Threading;
+using System.Runtime.CompilerServices;
 
 public class PasswordEntry
 {
@@ -23,6 +24,8 @@ class Program
     private static byte[] vaultSalt = Array.Empty<byte>();
     private static List<PasswordEntry> vault = new();
 
+    private const int Iterations = 600_000;
+
     static byte[] GenerateSalt()
     {
         return RandomNumberGenerator.GetBytes(16);
@@ -30,16 +33,51 @@ class Program
 
     static bool VerifyMasterPassword(string password)
     {
-        string stored = File.ReadAllText("master.txt");
+        string stored;
+
+        try
+        {
+            stored = File.ReadAllText("master.txt");
+        }
+
+        catch (IOException)
+        {
+            Console.WriteLine("Could not read the master password file.");
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            Console.WriteLine("Access denied to master password file.");
+            return false;
+        }
+        
         string[] parts = stored.Split(':');
 
-        byte[] salt = Convert.FromBase64String(parts[0]);
-        byte[] storedHash = Convert.FromBase64String(parts[1]);
+        if(parts.Length !=2) return false;
 
+
+        byte[] salt;
+        byte[] storedHash;
+
+        try
+        {
+            salt = Convert.FromBase64String(parts[0]);
+            storedHash = Convert.FromBase64String(parts[1]);
+        }
+
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        if (salt.Length != 16 || storedHash.Length != 32)
+            return false;
+
+            
         byte[] hash = Rfc2898DeriveBytes.Pbkdf2(
             password,
             salt,
-            100_000,
+            Iterations,
             HashAlgorithmName.SHA256,
             32
         );
@@ -52,7 +90,7 @@ class Program
         return Rfc2898DeriveBytes.Pbkdf2(
             password,
             salt,
-            100_000,
+            Iterations,
             HashAlgorithmName.SHA256,
             32
         );
@@ -64,16 +102,27 @@ class Program
             SetupMasterPassword();
         }
         
-        Console.Write("Enter master password: ");
-        string enteredPassword = ReadPassword()!;
+        int attempts = 0;
+        bool authenticated = false;
 
-        if (!VerifyMasterPassword(enteredPassword))
+        while (attempts < 3 && !authenticated)
         {
-            Console.WriteLine("Incorrect master password");
-            Console.ReadKey();
-            return;
+            Console.Write("Enter master password: ");
+            string EnteredPassword = ReadPassword();
+
+            if (VerifyMasterPassword(EnteredPassword))
+            {
+                vault = LoadVault(EnteredPassword);
+                authenticated = true;
+            }
+            else
+            {
+                attempts++;
+                Console.WriteLine($"Incorrect master password ({attempts}/3)");
+                Thread.Sleep(1000);
+            }
         }
-        vault = LoadVault(enteredPassword);
+        if (!authenticated) return;
 
         bool running = true;
         
@@ -82,10 +131,11 @@ class Program
             Console.Clear();
             Console.WriteLine("1. View Passwords");
             Console.WriteLine("2. Add Entry");
-            Console.WriteLine("3. Exit");
-            Console.WriteLine("4. Delete Entry");
-            Console.WriteLine("5. Search Entries");
-            Console.WriteLine("6. Edit Entries");
+            Console.WriteLine("3. Delete Entry");
+            Console.WriteLine("4. Search Entries");
+            Console.WriteLine("5. Edit Entries");
+            Console.WriteLine("6. Generate Password");
+            Console.WriteLine("7. Exit");
             Console.Write("\nSelect an option: ");
 
             string? selection = Console.ReadLine();
@@ -99,23 +149,34 @@ class Program
                     AddEntry();
                     break;
                 case "3":
-                    Console.WriteLine("\nAdios!");
-                    running = false;
-                    break;
-                case "4":
                     DeleteEntry();
-                    break;
-                case "5":
+                        break;
+                case "4":
                     SearchEntries();
                     break;
-                case "6":
+                case "5":
                     EditEntry();
+                    break;
+                case "6":
+                    Console.Clear();
+                    Console.WriteLine("Generated Password: " + GeneratePassword());
+                    Console.WriteLine("\nPress any key to return to menu.");
+                    Console.ReadKey();
+                    break;
+                case "7":
+                    Console.WriteLine("\nAdios!");
+                    running = false;
                     break;
                 default:
                     Console.WriteLine("\nInvalid option try again broski");
                     Console.ReadKey();
                     break;
             }
+        }
+
+        if (key.Length > 0)
+        {
+            CryptographicOperations.ZeroMemory(key);
         }
     }
 
@@ -125,19 +186,19 @@ class Program
 
         while(true)
         {
-            ConsoleKeyInfo key = Console.ReadKey(true);
+            ConsoleKeyInfo keyInfo = Console.ReadKey(true);
 
-            if (key.Key == ConsoleKey.Enter)
+            if (keyInfo.Key == ConsoleKey.Enter)
             break;
 
-            if (key.Key == ConsoleKey.Backspace && password.Length > 0)
+            if (keyInfo.Key == ConsoleKey.Backspace && password.Length > 0)
             {
                 password.Length--;
                 Console.Write("\b \b");
             }
-            else if (!char.IsControl(key.KeyChar))
+            else if (!char.IsControl(keyInfo.KeyChar))
             {
-                password.Append(key.KeyChar);
+                password.Append(keyInfo.KeyChar);
                 Console.Write("*");
             }
         }
@@ -146,15 +207,30 @@ class Program
     }
     static void SetupMasterPassword()
     {
-        Console.Write("Create a master password: ");
-        string masterPassword = ReadPassword()!;
+        string masterPassword;
+        while (true)
+        {
+            Console.Write("Create a master password: ");
+            masterPassword = ReadPassword();
+
+            if (masterPassword.Length < 8)
+            {
+                Console.WriteLine("Must be at least 8 characters");
+                continue;
+            }
+
+            Console.Write("Confirm master password: ");
+            if (ReadPassword() == masterPassword) break;
+
+            Console.WriteLine("Passwords don't match, try again crodie");
+        }
 
         byte[] salt = GenerateSalt();
 
         byte[] hash = Rfc2898DeriveBytes.Pbkdf2(
             masterPassword,
             salt,
-            100_000,
+            Iterations,
             HashAlgorithmName.SHA256,
             32
         );
@@ -166,7 +242,7 @@ class Program
 
         Console.WriteLine("Master Password created.");
 
-        Console.WriteLine("Press any key to return to menu");
+        Console.WriteLine("Press any key to log in");
 
         Console.ReadKey();
     }
@@ -209,7 +285,9 @@ class Program
            Console.ReadKey();
            Environment.Exit(1);
         }
-        return JsonSerializer.Deserialize<List<PasswordEntry>>(plain)?? new List<PasswordEntry>();
+        var entries = JsonSerializer.Deserialize<List<PasswordEntry>>(plain)?? new List<PasswordEntry>();
+        CryptographicOperations.ZeroMemory(plain);
+        return entries;
     }
     
     private static void SaveVault()
@@ -222,8 +300,12 @@ class Program
         using var aes = new AesGcm(key, 16);
         aes.Encrypt(nonce, plain, cipher, tag);
 
-        File.WriteAllBytes(VaultPath,
+        string tempPath = VaultPath + ".tmp";
+        File.WriteAllBytes(tempPath,
         vaultSalt.Concat(nonce).Concat(tag).Concat(cipher).ToArray());
+        File.Move(tempPath, VaultPath, overwrite: true);
+
+        CryptographicOperations.ZeroMemory(plain);
     }
     private static void AddEntry()
     {
@@ -276,9 +358,20 @@ class Program
                 var entry = vault[i];
                 Console.WriteLine($"{i+1}. {entry.Title}");
                 Console.WriteLine($"    Username: {entry.Username}");
-                Console.WriteLine($"    Password: {entry.Password}");
+                Console.WriteLine($"    Password: {new string('*', entry.Password.Length)}");
                 Console.WriteLine($"    URL: {entry.URL}");
                 Console.WriteLine();
+            }
+
+            Console.Write("\nEnter an entry number to reveal its password (or press enter to go back): ");
+            string? pick = Console.ReadLine();
+            if(int.TryParse(pick, out int n) && n >= 1 && n <= vault.Count)
+            {
+                Console.WriteLine($"\n{vault[n - 1].Title}: {vault[n-1].Password}");
+                Console.WriteLine("Press any key to hide");
+                Console.ReadKey();
+                Console.Clear();
+                return;
             }
         }
         Console.WriteLine("\nPress any key to return to menu");
@@ -308,8 +401,6 @@ class Program
                 
                 Console.WriteLine($"Username: {entry.Username}");
                 
-                Console.WriteLine($"Password: {entry.Password}");
-
                 Console.WriteLine($"URL: {entry.URL}");
 
                 Console.WriteLine();
@@ -348,6 +439,9 @@ class Program
         }
         var entry = vault[number - 1];
 
+        Console.Write($"New title ({entry.Title}): ");
+        string title = Console.ReadLine() ?? "";
+
         Console.Write($"New username/email ({entry.Username}): ");
         string username = Console.ReadLine() ?? "";
 
@@ -357,14 +451,17 @@ class Program
         Console.Write($"New URL ({entry.URL}): ");
         string url = Console.ReadLine() ?? "";
 
+        if (!string.IsNullOrWhiteSpace(title))
+            entry.Title = title;
+            
         if (!string.IsNullOrWhiteSpace(username))
             entry.Username = username;
 
         if (!string.IsNullOrEmpty(password))
             entry.Password = password;
 
-        if (!string.IsNullOrWhiteSpace(url))
             entry.URL = url;
+
         
         SaveVault();
 
@@ -394,14 +491,21 @@ class Program
         Console.Write("\nEnter the number of the entry you want to delete: ");
         string? input = Console.ReadLine();
 
-        if (int.TryParse(input, out int number) &&
-            number >= 1 &&
-            number <= vault.Count)
+        if (int.TryParse(input, out int number) && number >= 1 && number <= vault.Count)
         {
+            Console.Write($"Delete '{vault[number - 1].Title}'? (y/n)");
+            string? confirm = Console.ReadLine();
+
+            if(confirm?.Trim().ToLower() == "y")
+            {
             vault.RemoveAt(number - 1);
             SaveVault();
-
             Console.WriteLine("\nEntry Deleted");
+            }
+            else
+            {
+                Console.WriteLine("\nDeletion cancelled.");
+            }
         }
         else
         {
@@ -411,5 +515,21 @@ class Program
     Console.WriteLine("Press any key to return to the menu");
         Console.ReadKey();
     }
-    
+
+    static string GeneratePassword(int length = 16, bool useSymbols = true)
+    {
+        const string lower = "abcdefghijklmnopqrstuvwxyz";
+        const string upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        const string digits = "0123456789";
+        const string symbols = "!@#$%^&*()_+-=[]|{};':,/<>?";
+
+        string validChars = lower + upper + digits + (useSymbols ? symbols : "");
+        StringBuilder res = new();
+        
+        for (int i = 0; i < length; i++)
+                {
+            res.Append(validChars[RandomNumberGenerator.GetInt32(validChars.Length)]);
+        }
+        return res.ToString();
+    }
 }

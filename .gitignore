@@ -3,4 +3,9 @@ obj/
 publish/
 vault.json
 vault.dat
-master.txt.DS_Store
+vault.dat.tmp
+master.txt
+.DS_Store
+.vs/
+.vscode/
+Thumbs.db
